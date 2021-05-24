@@ -11,6 +11,7 @@
 #' @param ordering an ordering corresponding to the bin column in `sample_mapping`.
 #'  e.g.: c('low', 'low_mid', 'mid_high', 'high').
 #' @return a three-dimensional array corresponding to [sample, guide, bins]
+#' @export
 counts_to_array = function(raw_counts, sample_mapping, ordering) {
   sample_names = unique(sample_mapping$sample)
   sample_mapping = dplyr::mutate(sample_mapping, bin = factor(bin, levels = ordering))
@@ -53,6 +54,7 @@ counts_to_array = function(raw_counts, sample_mapping, ordering) {
 #' @param control_guide_regex a regular expression used to find/match control guides. default is 'Non-'.
 #' @param bin_size_prior the expected mass in each bin. If NULL, defaults to uniform (e.g. c(0.25, 0.25, 0.25, 0.25)).
 #' @return a water bear object that inference can be performed on.
+#' @export
 counts_to_wb = function(
   counts_array,
   gene_mapping,
@@ -73,6 +75,9 @@ counts_to_wb = function(
 
   nt_guide_names = inner_join(guide_names,
     dplyr::filter(gene_mapping, grepl(control_guide_regex, gene)), by = 'guide')
+  if (nrow(nt_guide_names) < 1) {
+    stop('couldn\'t find any control guides. check the regular expression in `control_guide_regex` and make sure it finds genes in `gene_mapping`.')
+  }
   test_guide_names = dplyr::inner_join(guide_names,
     dplyr::filter(gene_mapping, !grepl(control_guide_regex, gene)), by = c('guide'))
   test_guide_names = dplyr::mutate(test_guide_names, mapping = as.integer(factor(gene)))
