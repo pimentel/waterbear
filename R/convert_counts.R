@@ -12,7 +12,7 @@
 #'  e.g.: c('low', 'low_mid', 'mid_high', 'high').
 #' @return a three-dimensional array corresponding to [sample, guide, bins]
 #' @export
-counts_to_array = function(raw_counts, sample_mapping, ordering) {
+wb_counts_to_array = function(raw_counts, sample_mapping, ordering) {
   sample_names = unique(sample_mapping$sample)
   sample_mapping = dplyr::mutate(sample_mapping, bin = factor(bin, levels = ordering))
 
@@ -45,7 +45,7 @@ counts_to_array = function(raw_counts, sample_mapping, ordering) {
   counts_array
 }
 
-#' counts to water bear
+#' counts to waterbear object
 #'
 #' this function takes a count table and converts it to a water bear object
 #'
@@ -55,7 +55,7 @@ counts_to_array = function(raw_counts, sample_mapping, ordering) {
 #' @param bin_size_prior the expected mass in each bin. If NULL, defaults to uniform (e.g. c(0.25, 0.25, 0.25, 0.25)).
 #' @return a water bear object that inference can be performed on.
 #' @export
-counts_to_wb = function(
+wb_make_object = function(
   counts_array,
   gene_mapping,
   control_guide_regex = 'Non-',
