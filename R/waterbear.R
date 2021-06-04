@@ -1,6 +1,8 @@
 #' parallel waterbear inference
 #'
 #' run waterbear in parallel
+#' TODO: fix this... apparently needs all of the code embedded
+#' https://r-nimble.org/nimbleExamples/parallelizing_NIMBLE.html
 #' TODO: add some extraction functions
 #' TODO: add example
 #'
@@ -36,6 +38,7 @@ wb_run_parallel = function(
   }
 
   wb_lambda = function(s) {
+    library('nimble')
     wb_run_sequential(wo, n_chains = 1, n_burnin = n_burnin,
     n_samples = n_samples,
     seed = s,
@@ -75,6 +78,7 @@ wb_run_sequential = function(
   summary = TRUE,
   nimble_params = list()
   ) {
+
   if (length(seed) > 1 && length(unique(seed)) != n_chains) {
     stop('number of unique seeds is not equal to the number of chains.')
   }
@@ -110,5 +114,26 @@ wb_run_sequential = function(
     thin = thin,
     setSeed = seed,
     summary = summary)
-  samples
+  list(samples = samples)
+}
+
+# recode a set of samples
+# e.g.:
+# wb_result = wb_run_sequential(wo)
+# gene_inclusion = wb_recode(wb_result$samples, wo)
+wb_recode = function(wb_samples, wo) {
+  if(!is.null(wb_samples$summary$all.chains)) {
+    s = wb_samples$summary$all.chains
+  }
+
+  gi = data.frame(s, mapping = rownames(s))
+  gi = dplyr::filter(gi, grepl('gene_inclusion', mapping))
+  gi = dplyr::mutate(gi, mapping = sub('gene_inclusion\\[', '', mapping))
+  gi = dplyr::mutate(gi, mapping = sub('\\]', '', mapping))
+  gi = dplyr::mutate(gi, mapping = as.integer(mapping))
+  gm = dplyr::distinct(
+    dplyr::select(wo$test_guide_names, gene, mapping)
+    )
+  gi = inner_join(gi, gm, by = 'mapping')
+  gi
 }
