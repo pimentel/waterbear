@@ -127,3 +127,26 @@ shared_dispersion_model = nimbleCode({
     }
   }
 })
+
+# TODO: implement rank base proposal
+
+# mass function for adding a variable from bayesian sparse linear mixed models
+# mixture * Categorical(0, max) + (1 - mixture) * TruncatedGeometric(p_geometric)
+rqt = nimbleFunction(
+  run = function(n = integer(0), max = integer(0), mixture = double(0), p_geometric = double(0)) {
+    returnType(double(1))
+    p = rep(p_geometric, max)
+    q = 1 - p[1]
+    s = p[1]
+    for (i in 2:max) {
+      p[i] = p[i - 1] * q
+      s = p[i] + s
+    }
+    p = p / s
+    for (i in 1:max) {
+      p[i] = mixture / max + (1 - mixture) * p[i]
+    }
+    return(rcat(n, p) - 1)
+  })
+
+
