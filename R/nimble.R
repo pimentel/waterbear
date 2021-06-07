@@ -149,4 +149,79 @@ rqt = nimbleFunction(
     return(rcat(n, p) - 1)
   })
 
+get_nth_zero = nimbleFunction(
+  run = function(indicator = integer(1), order = integer(1), n = integer(0)) {
+    returnType(integer(i))
+    nz = 0
+    for (i in 1:length(indicator)) {
+      if (indicator[order[i]] == 0) {
+        nz = nz + 1
+        if (nz == n) {
+          return(order[i])
+        }
+      }
+    }
+    # n is larger than the number of zeros
+    return(-1)
+  })
 
+rank_RW <- nimbleFunction(
+
+    contains = sampler_BASE,
+
+    setup = function(model, mvSaved, target, control) {
+        calcNodes <- model$getDependencies(target)
+        r <- control$rank
+        o <- control$order
+    },
+
+    run = function() {
+        # initial model logProb
+        model_lp_initial <- getLogProb(model, calcNodes)
+        # choose to add, remove, or swap
+        which_move <- rcat(1, c(0.45, 0.45, 0.1))
+        current_values = model[[target]]
+        proposal = current_values
+        if (which_move == 1) {
+          # TODO: run rqt and get a variable to add
+          n_zeros = length(which(current_values == 0))
+          which_rank = rqt(1, n_zeros, 0.3, 2 / n_zeros) + 1
+          i = get_nth_zero(current_values, o, which_rank)
+          proposal[i] = 1
+        } else if (which_move == 2) {
+          # TODO: uniformly pick one to remove
+          which_ones = which(current_value == 1)
+          i = rcat(1, rep(1, length(which_ones)))
+          proposal[i] = 0
+        } else {
+          # TODO: uniformly pick one to remove and one to add
+          which_zeros = which(current_value == 0)
+          i = rcat(1, rep(1, length(which_zeros)))
+          proposal[i] = 1
+          which_ones = which(current_value == 1)
+          j = rcat(1, rep(1, length(which_ones)))
+          proposal[j] = 0
+        }
+        # store proposal into model
+        model[[target]] <<- proposal
+        # proposal model logProb
+        model_lp_proposed <- model$calculate(calcNodes)
+
+        # log-Metropolis-Hastings ratio
+        log_MH_ratio <- model_lp_proposed - model_lp_initial
+
+        # Metropolis-Hastings step: determine whether or
+        # not to accept the newly proposed value
+        u <- runif(1, 0, 1)
+        if(u < exp(log_MH_ratio)) jump <- TRUE
+        else                      jump <- FALSE
+
+        # keep the model and mvSaved objects consistent
+        if(jump) copy(from = model, to = mvSaved, row = 1,
+                         nodes = calcNodes, logProb = TRUE)
+        else     copy(from = mvSaved, to = model, row = 1,
+                         nodes = calcNodes, logProb = TRUE)
+    },
+
+    methods = list(   reset = function () {}   )
+)
