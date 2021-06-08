@@ -73,6 +73,7 @@ sample_specific_dispersion_model = nimbleCode({
   psi ~ dbeta(10, 10)
   sigma_gene ~ dgamma(1, 0.10)
   sigma_guide ~ dgamma(1, 0.10)
+  # gene_inclusion[1:N_genes] ~ dbern(psi)
   for (gene in 1:N_genes) {
     gene_inclusion[gene] ~ dbern(psi)
     gene_shift[gene] ~ dnorm(0, sd = sigma_gene)

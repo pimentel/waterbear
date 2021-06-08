@@ -137,3 +137,7 @@ wb_recode = function(wb_samples, wo) {
   gi = inner_join(gi, gm, by = 'mapping')
   gi
 }
+
+recode = function(test_guide_names) {
+  dplyr::distinct(dplyr::select(test_guide_names, gene, mapping))
+}

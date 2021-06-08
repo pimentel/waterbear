@@ -129,3 +129,38 @@ wb_make_object = function(
 
   list(data = gg_data, init = gg_init, const = gg_const, test_guide_names = test_guide_names)
 }
+
+#' @export
+wb_em_start = function(wo, n_it = 10) {
+  message('estimating bin sizes')
+  control_guides = wo$data$x[, wo$const$nt_data_index, ]
+  target_counts = wo$data$x[, wo$const$guide_data_index, ]
+  dispersion_hat = estimate_dispersion_from_controls(control_guides, wo$init$bin_alpha)
+  # null_cutoffs = t(apply(control_guides, 1, dirichlet_to_normal_bins))
+  bin_hat = estimate_bin_sizes(control_guides, wo$init$bin_alpha, dispersion_hat)
+
+  for (i in 1:n_it) {
+    message('.', appendLF = FALSE)
+    dispersion_hat = estimate_dispersion_from_controls(control_guides, bin_hat)
+    # null_cutoffs = t(apply(control_guides, 1, dirichlet_to_normal_bins))
+    bin_hat = estimate_bin_sizes(control_guides, bin_hat, dispersion_hat)
+  }
+  message('')
+
+  guide_mu  = estimate_guide_mu(target_counts, bin_hat, dispersion_hat)
+  gene_mu = estimate_gene_mu(guide_mu, wo$const$guide_to_gene)
+  test_stat = lrt(target_counts, bin_hat, dispersion_hat, guide_mu, wo$const$guide_to_gene)
+  test_stat = dplyr::mutate(test_stat, mapping = as.integer(mapping))
+
+  # recode the mapping
+  gm = dplyr::distinct(dplyr::select(wo$test_guide_names, gene, mapping))
+  test_stat = dplyr::inner_join(test_stat, gm, by = 'mapping')
+
+  list(
+    dispersion = dispersion_hat,
+    bins = bin_hat,
+    guide_mu = guide_mu,
+    gene_mu = gene_mu,
+    test_stat = test_stat
+  )
+}

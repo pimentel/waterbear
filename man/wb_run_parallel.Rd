@@ -36,6 +36,8 @@ a set of MCMC samples.
 }
 \description{
 run waterbear in parallel
+TODO: fix this... apparently needs all of the code embedded
+https://r-nimble.org/nimbleExamples/parallelizing_NIMBLE.html
 TODO: add some extraction functions
 TODO: add example
 }

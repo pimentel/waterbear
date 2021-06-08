@@ -92,8 +92,6 @@ estimate_gene_mu = function(guide_mu, guide_to_gene) {
   stringsAsFactors = FALSE)
 }
 
-# TODO: lrt and sort
-
 lrt = function(counts, bin_sizes, phi, mu, guide_to_gene) {
   cutoffs = t(apply(bin_sizes, 1, dirichlet_to_normal_bins))
   ll_0 = sapply(1:dim(counts)[2],
@@ -114,6 +112,6 @@ lrt = function(counts, bin_sizes, phi, mu, guide_to_gene) {
       data.frame(ll_0 = gene_0, ll_1 = gene_1, lambda = -2 * (gene_0 - gene_1))
     })
   gene_lrt = dplyr::bind_rows(gene_lrt)
-  gene_lrt = dplyr::mutate(gene_lrt, gene = names(ll_index))
+  gene_lrt = dplyr::mutate(gene_lrt, mapping = names(ll_index))
   gene_lrt
 }
