@@ -155,12 +155,24 @@ wb_em_start = function(wo, n_it = 10) {
   # recode the mapping
   gm = dplyr::distinct(dplyr::select(wo$test_guide_names, gene, mapping))
   test_stat = dplyr::inner_join(test_stat, gm, by = 'mapping')
+  test_stat = dplyr::arrange(test_stat, desc(lambda))
 
-  list(
+  updates = list(
     dispersion = dispersion_hat,
     bins = bin_hat,
     guide_mu = guide_mu,
     gene_mu = gene_mu,
-    test_stat = test_stat
+    test_stat = test_stat,
+    order = test_stat$mapping
   )
+  wo$init$dispersion = updates$dispersion
+  wo$init$bin_alpha = updates$bins
+  cutoffs_hat = t(apply(updates$bins, 1, dirichlet_to_normal_bins))
+  wo$init$cutoffs = cutoffs_hat
+  n_sig = round(wo$init$psi * wo$const$N_genes)
+  wo$init$gene_inclusion[1:length(wo$gene_inclusion)] = 0
+  wo$init$gene_inclusion[updates$order[1:n_sig]] = 1
+  wo$const$order = updates$order
+
+  list(wo = wo, updates = updates)
 }
