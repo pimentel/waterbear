@@ -73,14 +73,26 @@ wb_make_object = function(
     }
   }
 
-  nt_guide_names = inner_join(guide_names,
-    dplyr::filter(gene_mapping, grepl(control_guide_regex, gene)), by = 'guide')
-  if (nrow(nt_guide_names) < 1) {
-    stop('couldn\'t find any control guides. check the regular expression in `control_guide_regex` and make sure it finds genes in `gene_mapping`.')
+  if (is.na(control_guide_regex) || is.null(control_guide_regex) || control_guide_regex == '') {
+    nt_guide_names = data.frame()
+    control_guide_regex = 'ANYWHERE_BUT_HERE'
+  } else {
+    nt_guide_names = inner_join(guide_names,
+      dplyr::filter(gene_mapping, grepl(control_guide_regex, gene)), by = 'guide')
+    if (nrow(nt_guide_names) < 1) {
+      stop('couldn\'t find any control guides. check the regular expression in `control_guide_regex` and make sure it finds genes in `gene_mapping`.')
   }
-  test_guide_names = dplyr::inner_join(guide_names,
-    dplyr::filter(gene_mapping, !grepl(control_guide_regex, gene)), by = c('guide'))
-  test_guide_names = dplyr::mutate(test_guide_names, mapping = as.integer(factor(gene)))
+  }
+  gene_names = dplyr::filter(gene_mapping, !grepl(control_guide_regex, gene))
+  gene_names = dplyr::select(gene_names, gene)
+  gene_names = dplyr::distinct(gene_names)
+  gene_names = dplyr::arrange(gene_names, gene)
+  gene_names = dplyr::mutate(gene_names, mapping = 1:nrow(gene_names))
+  gene_mapping_no_controls = inner_join(gene_mapping, gene_names, by = 'gene')
+
+  test_guide_names = dplyr::inner_join(
+    guide_names, gene_mapping_no_controls, by = c('guide'))
+  # test_guide_names = dplyr::mutate(test_guide_names, mapping = as.integer(factor(gene)))
   test_guide_names = dplyr::arrange(test_guide_names, i)
 
   gg_data = list(x = counts_array)
@@ -90,9 +102,9 @@ wb_make_object = function(
     N_guides = nrow(test_guide_names),
     x_total = apply(gg_data$x, c(1, 2), sum),
     N_genes = length(unique(test_guide_names$mapping)),
-    N_nt = nrow(nt_guide_names),
     N_bins = N_bins,
-    nt_index = 1:nrow(nt_guide_names),
+    N_nt = nrow(nt_guide_names),
+    nt_index = (if(nrow(nt_guide_names) > 0) {1:nrow(nt_guide_names)} else {NULL}),
     nt_data_index = nt_guide_names$i,
     guide_index = 1:nrow(test_guide_names),
     guide_data_index = test_guide_names$i,
@@ -131,10 +143,16 @@ wb_make_object = function(
 }
 
 #' @export
-wb_em_start = function(wo, n_it = 10) {
+wb_em_start = function(wo, n_it = 10, n_random_guides = 1000) {
   message('estimating bin sizes')
-  control_guides = wo$data$x[, wo$const$nt_data_index, ]
-  target_counts = wo$data$x[, wo$const$guide_data_index, ]
+  control_guides = wo$data$x[, wo$const$nt_data_index, , drop = FALSE]
+  target_counts = wo$data$x[, wo$const$guide_data_index, , drop = FALSE]
+  if (is.null(wo$const$nt_data_index)) {
+    msg = paste0('no control guides, randomly sampling ', n_random_guides, '.')
+    message(msg)
+    control_guides = target_counts[, sample(1:dim(target_counts)[2], n_random_guides), ,
+      drop = FALSE]
+  }
   dispersion_hat = estimate_dispersion_from_controls(control_guides, wo$init$bin_alpha)
   # null_cutoffs = t(apply(control_guides, 1, dirichlet_to_normal_bins))
   bin_hat = estimate_bin_sizes(control_guides, wo$init$bin_alpha, dispersion_hat)
@@ -146,9 +164,12 @@ wb_em_start = function(wo, n_it = 10) {
     bin_hat = estimate_bin_sizes(control_guides, bin_hat, dispersion_hat)
   }
   message('')
+  # browser()
 
+  message('estimating guide and gene level effects')
   guide_mu  = estimate_guide_mu(target_counts, bin_hat, dispersion_hat)
   gene_mu = estimate_gene_mu(guide_mu, wo$const$guide_to_gene)
+  message('ranking based on likelihood ratio')
   test_stat = lrt(target_counts, bin_hat, dispersion_hat, guide_mu, wo$const$guide_to_gene)
   test_stat = dplyr::mutate(test_stat, mapping = as.integer(mapping))
 
@@ -167,12 +188,65 @@ wb_em_start = function(wo, n_it = 10) {
   )
   wo$init$dispersion = updates$dispersion
   wo$init$bin_alpha = updates$bins
-  cutoffs_hat = t(apply(updates$bins, 1, dirichlet_to_normal_bins))
+  cutoffs_hat = matrix(apply(updates$bins, 1, dirichlet_to_normal_bins),
+    nrow = wo$const$N, byrow = TRUE)
+  # cutoffs_hat = t(apply(updates$bins, 1, dirichlet_to_normal_bins))
   wo$init$cutoffs = cutoffs_hat
   n_sig = round(wo$init$psi * wo$const$N_genes)
   wo$init$gene_inclusion[1:length(wo$gene_inclusion)] = 0
   wo$init$gene_inclusion[updates$order[1:n_sig]] = 1
   wo$const$order = updates$order
+  wo$updates = updates
 
-  list(wo = wo, updates = updates)
+  wo
+}
+
+#' @param bin_sizes either a vector the length of observed bins to be used for every sample,
+#' or, a list the length of the number of samples with the estimated bin size for
+#' the observed bins
+#' @export
+wb_estimate_unobserved = function(counts_array, estimated_fraction, bin_sizes,
+  ordering) {
+
+  if (is.numeric(bin_sizes)) {
+    bin_sizes = lapply(1:dim(counts_array)[1], function(i) bin_sizes)
+  }
+  if (is.numeric(estimated_fraction)) {
+    estimated_fraction = lapply(1:dim(counts_array)[1], function(i) estimated_fraction)
+  }
+
+  unobserved_by_sample = lapply(1:dim(counts_array)[1],
+    function(i) {
+      estimate_unobserved_per_sample(counts_array[i, , ],
+        estimated_fraction[[i]],
+        bin_sizes[[i]])
+    })
+  updated_counts = array(NA, dim = dim(counts_array) + c(0, 0, 1))
+  updated_counts[
+    1:dim(counts_array)[1],
+    1:dim(counts_array)[2],
+    1:dim(counts_array)[3]] = counts_array
+  tmp = dimnames(counts_array)
+  tmp[[3]] = c(tmp[[3]], 'unobserved')
+  dimnames(updated_counts) = tmp
+  for (i in 1:dim(updated_counts)[1]) {
+    updated_counts[i, , 'unobserved'] = as.integer(pmax(unobserved_by_sample[[i]]$unobserved, 0))
+  }
+  updated_counts[, , ordering]
+}
+
+estimate_unobserved_per_sample = function(counts, gfpr, bin_sizes) {
+  observed = rowSums(counts)
+  n_hat = sum(observed) / sum(bin_sizes)
+  gfpr = gfpr / sum(gfpr)
+  unobserved = n_hat * gfpr - observed
+
+  lower_bound = observed + 1
+  upper_bound = round(2 * unobserved + lower_bound)
+
+  list(
+    unobserved = unobserved,
+    n_hat = n_hat,
+    lower_bound = lower_bound,
+    upper_bound = upper_bound)
 }

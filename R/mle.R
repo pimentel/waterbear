@@ -1,6 +1,7 @@
 dirichlet_multinomial_null_ll = function(counts, bin_sizes, phi, aggregate = TRUE) {
   # make sure that bin_sizes is a probability distribution
-  if (all(apply(bin_sizes, 1, sum) != rep(1, nrow(bin_sizes)))) {
+  if (all(round(apply(bin_sizes, 1, sum), 4) != rep(1, nrow(bin_sizes)))) {
+    browser()
     print(bin_sizes)
     stop('bin_sizes != 1')
   }
@@ -13,7 +14,8 @@ dirichlet_multinomial_null_ll = function(counts, bin_sizes, phi, aggregate = TRU
     function(n) {
       sum(sapply(1:dim(counts)[2],
           function(g) {
-            ddirchmulti(counts[n, g, ], a[n, ], total_counts[n, g], TRUE)
+            ddirchmulti(counts[n, g, ], a[n, ],
+              total_counts[n, g], TRUE)
           }))
     })
   if (aggregate) {
@@ -33,7 +35,18 @@ estimate_dispersion_from_controls = function(counts, bin_sizes) {
 
 estimate_bin_sizes = function(counts, prior_bin_sizes, dispersion) {
   N = dim(counts)[1]
-  prior_bin_cutoffs = t(apply(prior_bin_sizes, 1, dirichlet_to_normal_bins))
+  prior_bin_cutoffs = matrix(apply(prior_bin_sizes, 1,
+      dirichlet_to_normal_bins), nrow = N,
+    byrow = TRUE)
+  if (dim(counts)[3] == 2) {
+    optim_method = 'Brent'
+    lower = -10
+    upper = 10
+  } else {
+    optim_method = 'Nelder-Mead'
+    lower = -Inf
+    upper = Inf
+  }
   for (n in 1:N) {
     current_fit = optim(
       prior_bin_cutoffs[n, ],
@@ -42,7 +55,7 @@ estimate_bin_sizes = function(counts, prior_bin_sizes, dispersion) {
         y[n, ] = x
         z = t(apply(y, 1, cutoff_to_probability, offset = 0))
         -dirichlet_multinomial_null_ll(counts, z, dispersion)
-      })
+      }, method = optim_method, lower = lower, upper = upper)
     prior_bin_cutoffs[n, ] = current_fit$par
   }
   t(apply(prior_bin_cutoffs, 1, cutoff_to_probability, offset = 0))
@@ -53,9 +66,16 @@ estimate_bin_sizes = function(counts, prior_bin_sizes, dispersion) {
 # assumes counts is a matrix with samples on the rows and columns representing bins
 # you will get this if you do all_counts[, g, ]
 ddmult_per_guide_ll = function(counts, cutoffs, mu, dispersion) {
-  ll = sapply(1:dim(counts)[1],
+  n_samples = dim(counts)[1]
+  ll = sapply(1:n_samples,
     function(n) {
-      cur_guide_counts = counts[n, ]
+      cur_guide_counts = NULL
+      if (n_samples > 1) {
+        cur_guide_counts = counts[n, , ]
+      } else {
+        cur_guide_counts = matrix(
+          counts[n, , ], nrow = 1, byrow = TRUE)
+      }
       a = cutoff_to_probability(cutoffs[n, ], mu)
       a = a * dispersion
       total = sum(cur_guide_counts)
@@ -65,13 +85,15 @@ ddmult_per_guide_ll = function(counts, cutoffs, mu, dispersion) {
 }
 
 estimate_guide_mu = function(counts, bin_sizes, dispersion) {
-  cutoffs = t(apply(bin_sizes, 1, dirichlet_to_normal_bins))
+  # cutoffs = t(apply(bin_sizes, 1, dirichlet_to_normal_bins))
+  cutoffs = matrix(apply(bin_sizes, 1, dirichlet_to_normal_bins),
+    nrow = dim(counts)[1], byrow = TRUE)
   # go guide by guide and estimate each mu
   sapply(1:dim(counts)[2],
     function(g) {
       fit = optim(c(0),
       function(x) {
-        -ddmult_per_guide_ll(counts[, g, ], cutoffs, x, dispersion)
+          -ddmult_per_guide_ll(counts[, g, , drop = FALSE], cutoffs, x, dispersion)
       }, method = 'Brent', lower = -10, upper = 10)
       fit$par
     })
@@ -93,15 +115,17 @@ estimate_gene_mu = function(guide_mu, guide_to_gene) {
 }
 
 lrt = function(counts, bin_sizes, phi, mu, guide_to_gene) {
-  cutoffs = t(apply(bin_sizes, 1, dirichlet_to_normal_bins))
+  # cutoffs = t(apply(bin_sizes, 1, dirichlet_to_normal_bins))
+  cutoffs = matrix(apply(bin_sizes, 1, dirichlet_to_normal_bins),
+    nrow = dim(counts)[1], byrow = TRUE)
   ll_0 = sapply(1:dim(counts)[2],
     function(g) {
-      ddmult_per_guide_ll(counts[, g, ], cutoffs, 0, phi)
+      ddmult_per_guide_ll(counts[, g, , drop = FALSE], cutoffs, 0, phi)
     })
 
   ll_1 = sapply(1:dim(counts)[2],
     function(g) {
-      ddmult_per_guide_ll(counts[, g, ], cutoffs, mu[g], phi)
+      ddmult_per_guide_ll(counts[, g, , drop = FALSE], cutoffs, mu[g], phi)
     })
 
   ll_index = split(1:length(ll_0), guide_to_gene)

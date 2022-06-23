@@ -54,14 +54,46 @@ cutoff_to_probability = nimbleFunction(
     returnType(double(1))
     p = numeric(length(cutoff) + 1)
     p[1] = phi(cutoff[1] - offset)
+    # if (length(cutoff) == 1) {
+    #   p[2] = 1.0 - p[1]
+    #   return(p)
+    # }
     total = p[1]
-    for (i in 2:length(cutoff)) {
-      p[i] = phi(cutoff[i] - offset) - phi(cutoff[i - 1] - offset)
-      total = total + p[i]
-    }
+    # if (length(cutoff) > 1) {
+      for (i in 2:length(cutoff)) {
+        p[i] = phi(cutoff[i] - offset) - phi(cutoff[i - 1] - offset)
+        total = total + p[i]
+      }
+    # }
     p[length(cutoff) + 1] = 1 - total
     return(p)
   })
+
+sample_specific_dispersion_model_no_controls = nimbleCode({
+  dispersion ~ dexp(1.0 / dispersion_prior_mean)
+  for (n in 1:N) {
+    bin_alpha[n, 1:N_bins] ~ ddirch(bin_alpha_prior[n, 1:N_bins])
+    cutoffs[n, 1:N_cutoffs] <- dirichlet_to_normal_bins(bin_alpha[n, 1:N_bins])
+    sample_dispersion[n] ~ dexp(1.0 / dispersion)
+  }
+  psi ~ dbeta(10, 10)
+  sigma_gene ~ dgamma(1, 0.10)
+  sigma_guide ~ dgamma(1, 0.10)
+  for (gene in 1:N_genes) {
+    gene_inclusion[gene] ~ dbern(psi)
+    gene_shift[gene] ~ dnorm(0, sd = sigma_gene)
+  }
+  for (g in 1:N_guides) {
+    guide_shift[g] ~ dnorm(gene_shift[guide_to_gene[g]], sd = sigma_guide)
+    total_shift[g] <- gene_inclusion[guide_to_gene[g]] * guide_shift[g]
+    for (n in 1:N) {
+      q[n, g, 1:N_bins] <- cutoff_to_probability(cutoffs[n, 1:N_cutoffs], total_shift[g])
+      x[n, guide_data_index[g], 1:N_bins] ~ ddirchmulti(
+        sample_dispersion[n] * q[n, g, 1:N_bins],
+        x_total[n, guide_data_index[g]])
+    }
+  }
+})
 
 sample_specific_dispersion_model = nimbleCode({
   dispersion ~ dexp(1.0 / dispersion_prior_mean)
@@ -77,11 +109,13 @@ sample_specific_dispersion_model = nimbleCode({
     gene_inclusion[gene] ~ dbern(psi)
     gene_shift[gene] ~ dnorm(0, sd = sigma_gene)
   }
-  for (g in 1:N_nt) {
-    for (n in 1:N) {
-      x[n, nt_data_index[g], 1:N_bins] ~ ddirchmulti(
-        sample_dispersion[n] * bin_alpha[n, 1:N_bins],
-        x_total[n, nt_data_index[g]])
+  if (N_nt > 0) {
+    for (g in 1:N_nt) {
+      for (n in 1:N) {
+        x[n, nt_data_index[g], 1:N_bins] ~ ddirchmulti(
+          sample_dispersion[n] * bin_alpha[n, 1:N_bins],
+          x_total[n, nt_data_index[g]])
+      }
     }
   }
   for (g in 1:N_guides) {
