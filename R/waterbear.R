@@ -123,8 +123,14 @@ wb_run_sequential = function(
 # gene_inclusion = wb_recode(wb_result$samples, wo)
 wb_recode = function(wb_samples, wo, extract_regex = 'gene_inclusion') {
   if(!is.null(wb_samples$summary$all.chains)) {
+ # if ('all.chains' %in% names(wb_samples$summary)) {
     s = wb_samples$summary$all.chains
+  } else {
+    s = wb_samples$summary
   }
+  # if(!is.null(wb_samples$summary$all.chains)) {
+  #   s = wb_samples$summary$all.chains
+  # }
 
   gi = data.frame(s, mapping = rownames(s))
   # gi = dplyr::filter(gi, grepl('gene_inclusion', mapping))

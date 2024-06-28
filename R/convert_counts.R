@@ -83,9 +83,16 @@ wb_make_object = function(
       stop('couldn\'t find any control guides. check the regular expression in `control_guide_regex` and make sure it finds genes in `gene_mapping`.')
   }
   }
-  test_guide_names = dplyr::inner_join(guide_names,
-    dplyr::filter(gene_mapping, !grepl(control_guide_regex, gene)), by = c('guide'))
-  test_guide_names = dplyr::mutate(test_guide_names, mapping = as.integer(factor(gene)))
+  gene_names = dplyr::filter(gene_mapping, !grepl(control_guide_regex, gene))
+  gene_names = dplyr::select(gene_names, gene)
+  gene_names = dplyr::distinct(gene_names)
+  gene_names = dplyr::arrange(gene_names, gene)
+  gene_names = dplyr::mutate(gene_names, mapping = 1:nrow(gene_names))
+  gene_mapping_no_controls = inner_join(gene_mapping, gene_names, by = 'gene')
+
+  test_guide_names = dplyr::inner_join(
+    guide_names, gene_mapping_no_controls, by = c('guide'))
+  # test_guide_names = dplyr::mutate(test_guide_names, mapping = as.integer(factor(gene)))
   test_guide_names = dplyr::arrange(test_guide_names, i)
 
   gg_data = list(x = counts_array)
