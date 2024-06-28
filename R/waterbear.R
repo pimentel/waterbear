@@ -121,14 +121,16 @@ wb_run_sequential = function(
 # e.g.:
 # wb_result = wb_run_sequential(wo)
 # gene_inclusion = wb_recode(wb_result$samples, wo)
-wb_recode = function(wb_samples, wo) {
+wb_recode = function(wb_samples, wo, extract_regex = 'gene_inclusion') {
   if(!is.null(wb_samples$summary$all.chains)) {
     s = wb_samples$summary$all.chains
   }
 
   gi = data.frame(s, mapping = rownames(s))
-  gi = dplyr::filter(gi, grepl('gene_inclusion', mapping))
-  gi = dplyr::mutate(gi, mapping = sub('gene_inclusion\\[', '', mapping))
+  # gi = dplyr::filter(gi, grepl('gene_inclusion', mapping))
+  # gi = dplyr::mutate(gi, mapping = sub('gene_inclusion\\[', '', mapping))
+  gi = dplyr::filter(gi, grepl(extract_regex, mapping))
+  gi = dplyr::mutate(gi, mapping = sub(paste0(extract_regex, '\\['), '', mapping))
   gi = dplyr::mutate(gi, mapping = sub('\\]', '', mapping))
   gi = dplyr::mutate(gi, mapping = as.integer(mapping))
   gm = dplyr::distinct(
