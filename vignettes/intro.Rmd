@@ -1,0 +1,367 @@
+---
+title: "Introduction to running Waterbear"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{intro}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 8,
+  fig.height = 5,
+  out.width = '100%'
+)
+```
+
+```{r eval=FALSE, echo=FALSE}
+library('devtools')
+
+install()
+document()
+build()
+build_vignettes()
+```
+
+Waterbear is a Bayesian method to infer CRISPR effects in pooled FACS screens.
+Due to its dependency on NIMBLE for the MCMC sampling, there are a few conceptual steps:
+
+1. Load the data.
+1. Make a Waterbear object
+1. Run some NIMBLE boilerplate to compile your model.
+1. Sample from using MCMC (NIMBLE). This is the main, time-consuming step which infers all
+   of the distributions.
+1. Analyze the results.
+
+
+```{r setup}
+library('waterbear')
+library('dplyr')
+library('tidyr')
+library('stringr')
+library('ggplot2')
+theme_set(theme_classic())
+```
+
+## Load the data
+
+Ultimately, what Waterbear expects is a 3-dimensional array where dimension one is
+replicate, two is guide, and three is the bin.
+This kind of datastructure is a bit clunky, and thus we provide some helper functions.
+In particular, your alignments might come in the MaGeCK-style format, where the columns
+are in the following order:
+
+1. `sgRNA`, a unique character label of that guide.
+2. `Gene`, a repeated character label of the corresponding gene that guide is targetting.
+3. `SAMPLE_LABEL_1`, the actual (raw) counts corresponding to the first sample
+4. `...`, more samples
+
+Let's start by loading one of the files from the package:
+
+```{r}
+raw_counts = read.table(
+  system.file('extdata','high_low_MOI_screens_D1_D2_D3_2022-04-23.count.txt',
+    package = 'waterbear'),
+  header = TRUE, stringsAsFactors = FALSE, sep = '\t')
+head(raw_counts[, 1:10])
+```
+
+Great.
+Data is as expected.
+The next thing we need to do is create a metadata data.frame describing each column.
+If you note, the columns have the suffix `DX_QY` where X represents the replicate and
+Y represents the bin.
+This experiment samples from all four bins, so there is no unobserved data.
+Let's now make the sample mapping data.frame
+
+
+```{r}
+c_name = grep('Low_Coverage_High_MOI', colnames(raw_counts), value = TRUE)
+sample_mapping = data.frame(c_name = c_name)
+sample_mapping = mutate(sample_mapping, sample = str_extract(c_name, 'D1|D2|D3'))
+sample_mapping = mutate(sample_mapping, bin = str_extract(c_name, 'Q[1-4]'))
+head(sample_mapping)
+```
+
+Note, you see that we have one row corresponding to each column in the `raw_counts` data.frame.
+
+The final thing we need to create a Waterbear style data array is the ordering of the
+bins.
+**This is a crucial step**.
+In particular, if the ordering is incorrect, you will end up with improper inferences.
+The order is from "low" to "high" in bins.
+
+```{r}
+ordering = c('Q1', 'Q2', 'Q3', 'Q4')
+```
+
+With these three objects, we can now make a Waterbear array.
+
+```{r}
+wb_array = wb_counts_to_array(raw_counts, sample_mapping, ordering)
+```
+
+Note: if your data is not in the MaGeCK-style format already, you can simply jump to the
+wb_array style format. as noted at the beginning of this section.
+Some examples of what the data might look like is as follows.
+
+Replicate 1, the first 5 guides:
+
+```{r}
+wb_array[1, 1:5, ]
+```
+
+Note the bins are ordered according to the specified ordering
+
+All three replicates across the first five guides, only the first bin:
+
+```{r}
+wb_array[, 1:5, 1]
+```
+
+## Waterbear object initialization
+
+Now that we have our data, we can make a simple Waterbear object.
+
+One thing we need is a guide to gene mapping. We can get this from the `raw_counts` data:
+
+```{r}
+gene_mapping = raw_counts[, c('sgRNA', 'Gene')]
+colnames(gene_mapping) = c('guide', 'gene')
+head(gene_mapping)
+```
+
+```{r}
+wo = wb_make_object(wb_array, gene_mapping, bin_size_prior = c(0.2, 0.3, 0.3, 0.2))
+```
+
+Note the final vector.
+This is the expected bin size prior.
+That is, in bin 3, we expect 0.30 of the mass.
+This prior isn't super important, as the tool will dynamically learn the bin configuration
+for each sample.
+A simple ballpark estimate is fine.
+
+Next, we find some reasonable starting parameters using likelihood estimation for most of
+the model:
+
+```{r cache=TRUE}
+wo = wb_em_start(wo)
+```
+
+We are ready for the next step.
+
+## Some NIMBLE boilerplate
+
+First, we need to load the NIMBLE models into the global namespace.
+A little unconventional, I know.
+
+```{r}
+source(system.file('nimble.R', package = 'waterbear'))
+```
+
+There are a few different types of models we can implement, but the most common will
+likely be the `sample_specific_disperison_model`.
+
+```{r}
+n_model = nimbleModel(sample_specific_dispersion_model,
+                      data = wo$data, constants = wo$const, inits = wo$init)
+```
+
+Next, configure the sampler. You won't need every parameter listed, but sometimes it's
+helpful to save them and look at them later.
+
+```{r cache=TRUE}
+n_configuration = configureMCMC(n_model)
+n_configuration$addMonitors(
+  c('gene_inclusion',
+    'total_shift',
+    'guide_shift',
+    'gene_shift',
+    'dispersion',
+    'sample_dispersion',
+    'psi'
+  ))
+```
+
+Finally, compile to C++
+
+```{r eval=FALSE}
+n_mcmc_build = buildMCMC(n_configuration)
+C_n_model = compileNimble(n_model)
+C_n_mcmc = compileNimble(n_mcmc_build, project = n_model, showCompilerOutput = TRUE)
+```
+
+We are ready to run our sampler!
+
+**Note:** we recognize this is currently a bit of a mess.
+We are currently working on a different sampler that is much faster and will not requires
+some of these workarounds.
+See branch `gibbs`.
+
+## Generate some samples
+
+There are some choices to make here.
+Generally speaking, the following are pretty sane defaults.
+If you want your results to be reproducible, make sure to set a seed.
+
+```{r eval=FALSE}
+n_samples = 10000
+n_burnin = 5000
+n_chains = 4
+seed = 42
+system.time({
+  wb_samples = runMCMC(
+    C_n_mcmc, niter = n_samples, nburnin = n_burnin,
+    nchains = n_chains,
+    setSeed = seed,
+    summary = TRUE)
+})
+```
+
+Now you sit and wait.
+On our cluster with one CPU this takes about 3.5 hours.
+
+```{r echo=FALSE}
+wb_samples = readRDS(system.file('low_coverage_high_moi.rds', package='waterbear'))
+```
+
+## Analyze the results
+
+With your raw posteriors in `wb_samples`, you can now analyze the results.
+
+```{r}
+guide_summaries = wb_guide_summaries(wo, wb_samples)
+```
+
+From here, we can see some helpful summaries across the guide and gene level.
+Here, we can see the largest overall guide level effects.
+
+```{r}
+arrange(guide_summaries$guides, desc(abs(Mean))) %>%
+  head()
+```
+
+
+For gene-level local false sign rate and related statistics, use the following function:
+
+```{r}
+lfsr_level = 0.05
+gene_posterior_summary = wb_gene_posterior_mass(wo, wb_samples, lfsr_level)
+```
+
+```{r}
+arrange(gene_posterior_summary, lfsr, desc(abs(mu))) %>%
+  head()
+```
+
+There are the genes we are most confident in with their corresponding `1 - lfsr`
+credibility interval.
+
+## Make some plots
+
+Now, we can start making some pretty plots.
+First, we might want to look at the top hits to see their gene-level posterior.
+
+
+```{r}
+# rearrange such that the greatest hits are on the top
+gene_posterior_summary = arrange(gene_posterior_summary, lfsr, desc(abs(mu)))
+gene_posterior_summary = mutate(gene_posterior_summary, plot_order = factor(gene, levels = gene))
+
+# plot the top 20
+p = ggplot(
+  head(gene_posterior_summary, 20), aes(plot_order, mu))
+p = p + geom_point()
+p = p + geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)
+p = p + geom_abline(intercept = 0, slope = 0, color = 'gray', linetype = 2)
+p = p + theme(axis.text.x = element_text(angle = 45,  hjust=1))
+p = p + xlab('Gene')
+p = p + ylab('Gene posterior mean')
+p
+```
+
+We can also look at arbitrary genes like this:
+
+```{r}
+p = ggplot(
+  bind_rows(
+    head(gene_posterior_summary, 5),
+    tail(gene_posterior_summary, 5)
+  ),
+  aes(plot_order, mu))
+p = p + geom_point()
+p = p + geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)
+p = p + geom_abline(intercept = 0, slope = 0, color = 'gray', linetype = 2)
+p = p + theme(axis.text.x = element_text(angle = 45,  hjust=1))
+p = p + xlab('Gene')
+p = p + ylab('Gene posterior mean')
+p
+```
+
+
+```{r}
+p = ggplot(
+  filter(gene_posterior_summary, grepl('stat', gene, ignore.case = TRUE)),
+  aes(plot_order, mu))
+p = p + geom_point()
+p = p + geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)
+p = p + geom_abline(intercept = 0, slope = 0, color = 'gray', linetype = 2)
+p = p + theme(axis.text.x = element_text(angle = 45,  hjust=1))
+p = p + xlab('Gene')
+p = p + ylab('Gene posterior mean')
+p
+```
+
+## Accessing posterior samples
+
+You can access the posterior samples in a decently structured way using
+`wb_get_posterior`.
+
+Right now, it can return guide level effects, gene level effects, and the gene level
+posterior inclusion probability.
+
+```{r}
+gene_effect = wb_get_posterior(wo, wb_samples, 'gene')
+head(gene_effect[, 1:10])
+```
+
+
+# A note on control guides
+
+Waterbear will attempt to find control guides in your guide-list by searching for guides
+with the string `Non-` somewhere in the name.
+This can be adjusted during `wb_make_object()` stage with the argument
+`control_guide_regex`.
+If you do not have any controls in the experiment, this parameter should be `NA` or
+`NULL`.
+
+Additionally, when initializing parameters, Waterbear will use a random set of guides to
+estimate the dispersion in the `wb_em_start()` function.
+The number of guides it will randomly choose is in the parameter `n_random_guides`.
+If there are guides that were found in the `wb_make_object()` stage, then
+`n_random_guides` will not be used.
+
+Finally, the standard model `sample_specific_dispersion_model` CANNOT be used.
+This model uses the control guides in the model to estimate the dispersion.
+You can use `sample_specific_dispersion_model_no_controls`.
+
+In summary, here are changes,
+
+```{r eval=FALSE}
+# to make the object
+wo = wb_make_object(wb_array, gene_mapping, bin_size_prior = c(0.2, 0.3, 0.3, 0.2),
+  control_guide_regex = NA)
+
+# no actual changes necessary, but can change the number of random guides
+wo = wb_em_start(wo, n_random_guides = 1000)
+
+# make sure to specify the no controls model
+n_model = nimbleModel(sample_specific_dispersion_model_no_controls,
+                      data = wo$data, constants = wo$const, inits = wo$init)
+```
+
+
