@@ -23,3 +23,5 @@ Please post any questions or any bugs to GitHub: https://github.com/pimentel/wat
 ## Development
 
 The current implementation depends on NIMBLE and thus, the interface leaves a bit to be desired.
+There is currently a manual C++ implementaiton under development in the `gibbs` branch.
+We expect it to be functional in the near future.
